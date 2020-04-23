@@ -20,11 +20,14 @@ import time
 from flask import *
 from flask_socketio import SocketIO
 from flask_socketio import *
+
+
 # https://flask-socketio.readthedocs.io/en/latest/
-       
+
 
 class GlobalModel(object):
     """docstring for GlobalModel"""
+
     def __init__(self):
         self.model = self.build_model()
         self.current_weights = self.model.get_weights()
@@ -39,19 +42,23 @@ class GlobalModel(object):
         self.valid_accuracies = []
 
         self.training_start_time = int(round(time.time()))
-    
+
     def build_model(self):
         raise NotImplementedError()
 
     # client_updates = [(w, n)..]
+
     def update_weights(self, client_weights, client_sizes):
         new_weights = [np.zeros(w.shape) for w in self.current_weights]
         total_size = np.sum(client_sizes)
-
         for c in range(len(client_weights)):
+            prob = 3 / (len(client_weights) * 1.0)
             for i in range(len(new_weights)):
-                new_weights[i] += client_weights[c][i] * client_sizes[c] / total_size
-        self.current_weights = new_weights        
+                temp_client_weights = np.array(client_weights[c][i])
+                mask = np.random.choice([True, False], size=temp_client_weights.shape, p=[1 - prob, prob])
+                temp_client_weights[mask] = 0
+                new_weights[i] += temp_client_weights * (1 / prob) * (client_sizes[c] / total_size)
+        self.current_weights = new_weights
 
     def aggregate_loss_accuracy(self, client_losses, client_accuracies, client_sizes):
         total_size = np.sum(client_sizes)
@@ -89,7 +96,7 @@ class GlobalModel(object):
             "train_accuracy": self.train_accuracies,
             "valid_accuracy": self.valid_accuracies
         }
-        
+
 
 class GlobalModel_MNIST_CNN(GlobalModel):
     def __init__(self):
@@ -148,7 +155,6 @@ class FLServer(object):
         # socket io messages
         self.register_handles()
 
-
         @self.app.route('/')
         def dashboard():
             return render_template('dashboard.html')
@@ -157,7 +163,6 @@ class FLServer(object):
         def status_page():
             return json.dumps(self.global_model.get_stats())
 
-        
     def register_handles(self):
         # single-threaded async, no need to lock
 
@@ -214,7 +219,7 @@ class FLServer(object):
             if data['round_number'] == self.current_round:
                 self.current_round_client_updates += [data]
                 self.current_round_client_updates[-1]['weights'] = pickle_string_to_obj(data['weights'])
-                
+
                 # tolerate 30% unresponsive clients
                 if len(self.current_round_client_updates) > FLServer.NUM_CLIENTS_CONTACTED_PER_ROUND * .7:
                     self.global_model.update_weights(
@@ -275,7 +280,6 @@ class FLServer(object):
                 print("== done ==")
                 self.eval_client_updates = None  # special value, forbid evaling again
 
-    
     # Note: we assume that during training the #workers will be >= MIN_NUM_WORKERS
     def train_next_round(self):
         self.current_round += 1
